@@ -5,7 +5,6 @@
 #
 from rv import rvtypes, commands, extra_commands as rve
 import os
-import urllib.request
 import PyOpenColorIO as OCIO
 
 #
@@ -81,6 +80,8 @@ def ensure_ocio_config():
     try:
         os.makedirs(target_dir, exist_ok=True)
         print(f"INFO: Downloading latest ACES 2.0 OCIO config from {DEFAULT_ACES_CONFIG_URL}...")
+        import urllib.request
+
         urllib.request.urlretrieve(DEFAULT_ACES_CONFIG_URL, target_path)
         if os.path.isfile(target_path):
             print(f"INFO: Successfully downloaded ACES config to {target_path}")

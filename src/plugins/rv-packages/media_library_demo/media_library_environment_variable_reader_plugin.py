@@ -5,7 +5,6 @@
 #
 
 import os
-import requests
 
 from http.cookies import SimpleCookie
 from tempfile import NamedTemporaryFile
@@ -161,6 +160,8 @@ def get_http_redirection(url: str) -> str:
 
     filename = os.path.basename(urlparse(url).path)
     file = NamedTemporaryFile(suffix=filename)
+
+    import requests
 
     session = requests.Session()
 

@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0 
 //
 use qt;
+use python;
 
 documentation: """
 This module can parse and convert a limited set of *asciidoc*
@@ -1637,6 +1638,9 @@ class: DocBrowser : QWidget
                 QItemSelectionModel.currentChanged, 
                 updateWebView2);
 
+        // Configure the default profile on first web use, rather than on player startup.
+        let profileSetup = PyObject_GetAttr(PyImport_Import("rv.runtime"), "setup_webview_default_profile");
+        PyObject_CallObject(profileSetup, PyTuple_New(0));
         _webView = QWebEngineView(_splitter);
         _webPage = DocPage(_webView, \: (void; QUrl url) { this.handleLink(url); } );
         _webView.setPage(_webPage);

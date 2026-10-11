@@ -16,16 +16,24 @@ try:
             if os.path.isdir(loc_cand) and "QTWEBENGINE_LOCALES_PATH" not in os.environ:
                 os.environ["QTWEBENGINE_LOCALES_PATH"] = loc_cand
 
-    from PySide6.QtWebEngineCore import QWebEngineProfile
-
-    def __dummy__():
-        pass
-
-    def setup_webview_default_profile():
-        default_profile = QWebEngineProfile.defaultProfile()
-        user_agent = default_profile.httpUserAgent() + " RV/" + os.environ.get("TWK_APP_VERSION", "")
-        default_profile.setHttpUserAgent(user_agent)
-
-    setup_webview_default_profile()
-except Exception:
+except OSError:
     pass
+
+
+def __dummy__():
+    pass
+
+
+def setup_webview_default_profile():
+    """Initialize Chromium only when a web view needs its default profile."""
+    try:
+        from PySide6.QtWebEngineCore import QWebEngineProfile
+
+        default_profile = QWebEngineProfile.defaultProfile()
+        suffix = " RV/" + os.environ.get("TWK_APP_VERSION", "")
+        user_agent = default_profile.httpUserAgent()
+        if not user_agent.endswith(suffix):
+            default_profile.setHttpUserAgent(user_agent + suffix)
+    except (ImportError, RuntimeError, AttributeError):
+        # Keep scripting available when the optional WebEngine binding is absent.
+        return

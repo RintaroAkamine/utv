@@ -10,6 +10,7 @@ import os
 
 from rv import rvtypes
 from rv import qtutils
+from rv import runtime
 
 from PySide6 import QtCore
 from PySide6 import QtWidgets
@@ -35,6 +36,7 @@ class WebView2(rvtypes.MinorMode):
         self.dock_widget = QDockWidget("Chromium Doc Widget", self.window)
         self.window.addDockWidget(QtCore.Qt.BottomDockWidgetArea, self.dock_widget)
 
+        runtime.setup_webview_default_profile()
         self.webview = QtWebEngineWidgets.QWebEngineView()
         self.webview.setMaximumHeight(140)
         self.dock_widget.setWidget(self.webview)
