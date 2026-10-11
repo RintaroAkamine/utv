@@ -13,6 +13,8 @@
 #include <MuTwkApp/MenuItem.h>
 #include <MuTwkApp/MenuState.h>
 #include <Mu/Function.h>
+#include <Mu/Environment.h>
+#include <Mu/Module.h>
 #include <Mu/MachineRep.h>
 #include <Mu/NodeAssembler.h>
 #include <Mu/NodePrinter.h>
@@ -41,6 +43,7 @@
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 
 using namespace Mu;
 using namespace std;
@@ -146,6 +149,26 @@ namespace TwkApp
     }
 
     void setDebugMUC(bool b) { Module::setDebugArchive(b); }
+
+    void precompileMuModules(const string& sources, const string& nativeModules, const string& moduleNames)
+    {
+        // Build utility: only read the supplied staged sources and native
+        // modules, never a user's startup scripts or module search paths.
+        Environment::SearchPath paths;
+        paths.emplace_back(sources.c_str());
+        paths.emplace_back(nativeModules.c_str());
+        Environment::setModulePath(paths);
+        Module::setCompileOnDemand(true, false);
+        istringstream names(moduleNames);
+        string name;
+        while (getline(names, name, ','))
+        {
+            if (name.empty() || !Module::load(muContext()->internName(name.c_str()), muProcess(), muContext()))
+            {
+                throw runtime_error("Unable to precompile Mu module: " + name);
+            }
+        }
+    }
 
     bool isDebuggingOn() { return g_context ? g_context->debugging() : debugging; }
 

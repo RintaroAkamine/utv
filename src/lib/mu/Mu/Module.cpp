@@ -15,6 +15,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 
 #ifdef _MSC_VER
 #include <windows.h>
@@ -32,6 +33,16 @@ namespace Mu
     bool Module::_compileOnDemand = false;
     bool Module::_compileDocs = false;
     bool Module::_debugArchive = false;
+
+    static bool archiveIsCurrent(const String& archive, const String& source)
+    {
+        std::error_code error;
+        const auto sourceTime = std::filesystem::last_write_time(UNICODE_C_STR(source.c_str()), error);
+        if (error)
+            return error == std::errc::no_such_file_or_directory;
+        const auto archiveTime = std::filesystem::last_write_time(UNICODE_C_STR(archive.c_str()), error);
+        return !error && archiveTime >= sourceTime;
+    }
 
     Module::Module(Context* context, const char* name)
         : Symbol(context, name)
@@ -374,7 +385,7 @@ namespace Mu
                     return m;
                 }
             }
-            else if (fileOK(mucName))
+            else if (fileOK(mucName) && archiveIsCurrent(mucName, muName))
             {
                 if (Module* m = loadMUC(mucName, name, process, context))
                 {

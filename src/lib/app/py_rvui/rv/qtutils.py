@@ -7,19 +7,36 @@ import rv.commands
 
 try:
     from PySide2 import QtGui, QtWidgets
-    from PySide2.QtGui import *
-    from PySide2.QtWidgets import *
-    from shiboken2 import wrapInstance
-    from shiboken2 import getCppPointer
+    from shiboken2 import getCppPointer, wrapInstance
 except ImportError:
     try:
         from PySide6 import QtGui, QtWidgets
-        from PySide6.QtGui import *
-        from PySide6.QtWidgets import *
-        from shiboken6 import wrapInstance
-        from shiboken6 import getCppPointer
+        from shiboken6 import getCppPointer, wrapInstance
     except ImportError:
         pass
+
+
+def __getattr__(name):
+    # Resolve the public Qt classes only when requested. Expanding both modules
+    # with wildcard imports constructs hundreds of unused binding types.
+    if not name.startswith("_"):
+        for module in (globals().get("QtWidgets"), globals().get("QtGui")):
+            if module is not None:
+                try:
+                    value = getattr(module, name)
+                except AttributeError:
+                    continue
+                globals()[name] = value
+                return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    names = set(globals())
+    for module in (globals().get("QtGui"), globals().get("QtWidgets")):
+        if module is not None:
+            names.update(getattr(module, "__all__", dir(module)))
+    return sorted(names)
 
 
 def sessionWindow():
@@ -29,7 +46,7 @@ def sessionWindow():
 
     rvPyLongPtr = rv.commands.sessionWindow()
     if rvPyLongPtr is not None:
-        return wrapInstance(rvPyLongPtr, QMainWindow)
+        return wrapInstance(rvPyLongPtr, QtWidgets.QMainWindow)
     else:
         return None
 
@@ -41,7 +58,7 @@ def sessionGLView():
 
     rvPyLongPtr = rv.commands.sessionGLView()
     if rvPyLongPtr is not None:
-        return wrapInstance(rvPyLongPtr, QOpenGLWidget)
+        return wrapInstance(rvPyLongPtr, QtWidgets.QOpenGLWidget)
     else:
         return None
 
@@ -53,7 +70,7 @@ def sessionTopToolBar():
 
     rvPyLongPtr = rv.commands.sessionTopToolBar()
     if rvPyLongPtr is not None:
-        return wrapInstance(rvPyLongPtr, QToolBar)
+        return wrapInstance(rvPyLongPtr, QtWidgets.QToolBar)
     else:
         return None
 
@@ -65,7 +82,7 @@ def sessionBottomToolBar():
 
     rvPyLongPtr = rv.commands.sessionBottomToolBar()
     if rvPyLongPtr is not None:
-        return wrapInstance(rvPyLongPtr, QToolBar)
+        return wrapInstance(rvPyLongPtr, QtWidgets.QToolBar)
     else:
         return None
 
@@ -76,5 +93,12 @@ def javascriptExport(webFrame):
     QWebFrame, connecting it to RV's event system and scripting layers.
     """
 
+    from rv import runtime
+
+    runtime.setup_webview_default_profile()
     rvPyLongPtrs = getCppPointer(webFrame)
     rv.commands.javascriptExport(rvPyLongPtrs[0])
+
+
+# Preserve from-import and wildcard compatibility for existing packages.
+__all__ = [name for name in __dir__() if not name.startswith("_")]

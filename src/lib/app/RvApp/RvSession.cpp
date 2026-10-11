@@ -531,7 +531,9 @@ namespace Rv
         if (!isLoading())
             return false;
 
-        bool ret = (m_loadCount == 0) ? (m_tryCount == 3) : (m_tryCount % 2 == 1);
+        // Allow one UI update for loading feedback before opening the first source.
+        // Waiting for three empty rendering passes delays the first media frame.
+        bool ret = (m_loadCount == 0) ? (m_tryCount == 1) : (m_tryCount % 2 == 1);
         ++m_tryCount;
 
         return ret;

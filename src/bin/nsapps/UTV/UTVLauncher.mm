@@ -14,6 +14,7 @@
 #import <unistd.h>
 #import <stdlib.h>
 #import <stdio.h>
+#import <CommonCrypto/CommonDigest.h>
 
 struct DepCheck {
     const char *formula;
@@ -325,7 +326,8 @@ static void runDiagnostics(void) {
 // Returns nil if UTV-bin loads, or if the check itself could not run or failed for some
 // other reason (never block a launch on the check). Otherwise returns dyld's message.
 //
-static NSString *libraryLoadFailure(NSString *realBin) {
+static NSString *libraryLoadFailure(NSString *realBin, BOOL *verified) {
+    *verified = NO;
     // stderr goes to a file rather than a pipe, so the child can never block on a full pipe.
     NSString *errPath = [NSTemporaryDirectory()
         stringByAppendingPathComponent:[NSString stringWithFormat:@"openutv_library_check_%d.txt", getpid()]];
@@ -353,6 +355,8 @@ static NSString *libraryLoadFailure(NSString *realBin) {
             [task terminate];
         } else if ([task terminationReason] == NSTaskTerminationReasonUncaughtSignal) {
             output = [NSString stringWithContentsOfFile:errPath encoding:NSUTF8StringEncoding error:nil];
+        } else if ([task terminationStatus] == 0) {
+            *verified = YES;
         }
     }
 
@@ -371,6 +375,73 @@ static NSString *libraryLoadFailure(NSString *realBin) {
     NSString *message = [[output substringFromIndex:dyld.location]
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     return [message length] > 1200 ? [message substringToIndex:1200] : message;
+}
+
+static NSString *digestString(NSString *value) {
+    NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding];
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *result = [NSMutableString string];
+    for (unsigned char byte : digest) [result appendFormat:@"%02x", byte];
+    return result;
+}
+
+static BOOL appendFileStamp(NSMutableString *stamp, NSString *path) {
+    struct stat info;
+    if (stat([path fileSystemRepresentation], &info) != 0) return NO;
+    [stamp appendFormat:@"%@:%llu:%llu:%lld:%lld:%ld\n", path,
+        (unsigned long long)info.st_dev, (unsigned long long)info.st_ino,
+        (long long)info.st_size, (long long)info.st_mtimespec.tv_sec, info.st_mtimespec.tv_nsec];
+    return YES;
+}
+
+// A successful load check can be reused while the executable, app libraries,
+// macOS version and Homebrew installation state are unchanged. Homebrew replaces
+// version directories and opt links on upgrades/reinstalls. Unreadable metadata
+// disables caching, and a short lifetime also covers changes outside Homebrew.
+static NSString *libraryInstallationStamp(NSString *realBin, NSString *brewPrefix) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *cellar = [brewPrefix stringByAppendingPathComponent:@"Cellar"];
+    NSString *opt = [brewPrefix stringByAppendingPathComponent:@"opt"];
+    NSString *lib = [[realBin stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"../lib"];
+    NSMutableString *stamp = [NSMutableString stringWithFormat:@"v1:%@\n", [[NSProcessInfo processInfo] operatingSystemVersionString]];
+    if (!appendFileStamp(stamp, realBin) || !appendFileStamp(stamp, cellar) || !appendFileStamp(stamp, opt)) return nil;
+    for (NSString *directory in @[cellar, opt, lib]) {
+        NSArray<NSString *> *entries = [fm contentsOfDirectoryAtPath:directory error:nil];
+        if (!entries) return nil;
+        for (NSString *entry in [entries sortedArrayUsingSelector:@selector(compare:)]) {
+            NSString *path = [directory stringByAppendingPathComponent:entry];
+            if (!appendFileStamp(stamp, path)) return nil;
+        }
+    }
+    return digestString(stamp);
+}
+
+static NSString *libraryCheckCachePath(NSString *realBin) {
+    NSString *root = getenv("UTV_LIBRARY_CHECK_CACHE_DIR")
+        ? [NSString stringWithUTF8String:getenv("UTV_LIBRARY_CHECK_CACHE_DIR")]
+        : [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"OpenUTV/library-checks"];
+    return [root stringByAppendingPathComponent:[digestString(realBin) stringByAppendingString:@".json"]];
+}
+
+static BOOL hasVerifiedInstallation(NSString *realBin, NSString *stamp) {
+    if (!stamp || getenv("UTV_FORCE_LIBRARY_CHECK")) return NO;
+    NSData *data = [NSData dataWithContentsOfFile:libraryCheckCachePath(realBin)];
+    if (!data) return NO;
+    id cache = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![cache isKindOfClass:[NSDictionary class]] || ![cache[@"stamp"] isKindOfClass:[NSString class]]
+        || ![cache[@"checkedAt"] isKindOfClass:[NSNumber class]]) return NO;
+    NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - [cache[@"checkedAt"] doubleValue];
+    return age >= 0 && age < 900 && [cache[@"stamp"] isEqualToString:stamp];
+}
+
+static void cacheVerifiedInstallation(NSString *realBin, NSString *stamp) {
+    NSString *path = libraryCheckCachePath(realBin);
+    [[NSFileManager defaultManager] createDirectoryAtPath:[path stringByDeletingLastPathComponent]
+                            withIntermediateDirectories:YES attributes:nil error:nil];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"stamp": stamp, @"checkedAt": @([[NSDate date] timeIntervalSince1970])}
+                                                  options:0 error:nil];
+    [data writeToFile:path options:NSDataWritingAtomic error:nil];
 }
 
 // The Homebrew formula named in a dyld message, e.g. ".../Cellar/opencolorio/2.6.0/lib/..." -> "opencolorio 2.6.0".
@@ -498,7 +569,6 @@ static BOOL isLaunchedFromFinder(int argc, char *argv[]) {
 
 @interface UTVLaunchEventCollector : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSMutableArray<NSString *> *requests;
-@property(nonatomic, assign) BOOL finished;
 @end
 
 @implementation UTVLaunchEventCollector
@@ -515,8 +585,26 @@ static BOOL isLaunchedFromFinder(int argc, char *argv[]) {
     }
 }
 
+- (void)application:(NSApplication *)application openFiles:(NSArray<NSString *> *)files {
+    [self.requests addObjectsFromArray:files];
+    [application replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
+}
+
+- (BOOL)application:(NSApplication *)application openFile:(NSString *)file {
+    [self.requests addObject:file];
+    return YES;
+}
+
+- (void)stopCollecting {
+    [NSApp stop:nil];
+    // Wake run's event dispatch even when this launcher has no window.
+    [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                      location:NSZeroPoint modifierFlags:0 timestamp:0
+                                  windowNumber:0 context:nil subtype:0 data1:0 data2:0] atStart:NO];
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    self.finished = YES;
+    [self stopCollecting];
 }
 @end
 
@@ -525,24 +613,31 @@ static NSArray<NSString *> *collectLaunchOpenRequests(void) {
     [NSApplication sharedApplication];
     [NSApp setDelegate:collector];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-    [NSApp finishLaunching];
-
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
-    while (!collector.finished && [deadline timeIntervalSinceNow] > 0) {
-        NSEvent *event = [NSApp nextEventMatchingMask:NSEventMaskAny
-                                            untilDate:deadline
-                                               inMode:NSDefaultRunLoopMode
-                                              dequeue:YES];
-        if (event) [NSApp sendEvent:event];
-    }
+    // Let AppKit deliver its initial open requests and did-finish notification.
+    // Manually finishing and polling NSEvents can miss that notification and
+    // consume the entire timeout on every Finder/Dock launch.
+    NSTimer *timeout = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:NO block:^(NSTimer *timer) {
+        [collector stopCollecting];
+    }];
+    [NSApp run];
+    [timeout invalidate];
+    [NSApp setDelegate:nil];
     return collector.requests;
 }
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         NSString *brewPrefix = detectBrewPrefix();
-        NSDictionary *manifest = fetchRemoteManifest();
-        NSArray<NSString *> *missing = findMissingDependencies(brewPrefix, manifest);
+        // The release's built-in dependency list is sufficient for an installed
+        // application. Keep network discovery on the repair path so a healthy
+        // launch never waits for GitHub. The real binary's library-load check
+        // below still detects missing or incompatible linked libraries.
+        NSDictionary *manifest = nil;
+        NSArray<NSString *> *missing = findMissingDependencies(brewPrefix, nil);
+        if ([missing count] > 0) {
+            manifest = fetchRemoteManifest();
+            missing = findMissingDependencies(brewPrefix, manifest);
+        }
         NSArray<NSString *> *postInstallCmds = manifest[@"post_install_commands"];
 
         // All dependencies satisfied -> launch real binary immediately
@@ -583,10 +678,17 @@ int main(int argc, char *argv[]) {
             NSString *realBin = findRealBinary();
             if (realBin) {
                 if (getenv("UTV_SKIP_LIBRARY_CHECK") == NULL) {
-                    NSString *failure = libraryLoadFailure(realBin);
-                    if (failure) {
-                        reportLibraryLoadFailure(failure, isLaunchedFromFinder(argc, argv));
-                        return 1;
+                    NSString *stamp = libraryInstallationStamp(realBin, brewPrefix);
+                    if (!hasVerifiedInstallation(realBin, stamp)) {
+                        BOOL verified = NO;
+                        NSString *failure = libraryLoadFailure(realBin, &verified);
+                        if (failure) {
+                            reportLibraryLoadFailure(failure, isLaunchedFromFinder(argc, argv));
+                            return 1;
+                        }
+                        if (verified && stamp && [stamp isEqualToString:libraryInstallationStamp(realBin, brewPrefix)]) {
+                            cacheVerifiedInstallation(realBin, stamp);
+                        }
                     }
                 }
                 if (isLaunchedFromFinder(argc, argv)) {

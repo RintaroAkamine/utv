@@ -855,9 +855,15 @@ int utf8Main(int argc, char* argv[])
     try
     {
         TwkApp::initMu(0);
+        // Keep application resources immutable; allow an explicit external cache.
+        if (!getenv("PYTHONPYCACHEPREFIX"))
+            bundle.setEnvVar("PYTHONDONTWRITEBYTECODE", "1");
         TwkApp::initPython(argc, argv);
         Rv::initUICommands();
         Rv::initCommands();
+
+        if (opts.runMuPrecompilation())
+            return 0;
 
         if (!opts.initializeAfterParsing((noPrefs) ? 0 : &prefOpts))
         {
