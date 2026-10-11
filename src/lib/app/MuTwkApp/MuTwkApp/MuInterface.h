@@ -54,6 +54,8 @@ namespace TwkApp
 
     void initMu(const char* batchfile, GCFilterFunc F = 0);
 
+    void precompileMuModules(const std::string& sources, const std::string& nativeModules, const std::string& moduleNames);
+
     void initWithFile(Mu::MuLangContext*, Mu::Process*, const Mu::Context::ModuleList&, const char* filename);
 
     void initWithString(Mu::MuLangContext*, Mu::Process*, const Mu::Context::ModuleList&, const char* buffer);

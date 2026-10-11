@@ -756,9 +756,16 @@ int main(int argc, char* argv[])
     try
     {
         TwkApp::initMu(0, gc_filter);
+        // Runtime bytecode writes inside a signed bundle invalidate its seal.
+        // Release builds include bytecode; an explicit external cache is allowed.
+        if (!getenv("PYTHONPYCACHEPREFIX"))
+            bundle.setEnvVar("PYTHONDONTWRITEBYTECODE", "1");
         TwkApp::initPython(argc, argv);
         Rv::initCommands();
         Rv::initUICommands();
+
+        if (opts.runMuPrecompilation())
+            return 0;
 
         if (!opts.initializeAfterParsing((noPrefs) ? 0 : &prefOpts))
         {

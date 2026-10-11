@@ -42,6 +42,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <stl_ext/string_algo.h>
 
 extern void TwkMovie_GenericIO_setDebug(bool);
@@ -58,6 +59,20 @@ namespace Rv
     using namespace std;
     using namespace IPCore;
     using namespace boost;
+
+    bool Options::runMuPrecompilation() const
+    {
+        const auto sources = muFlags.find("PrecompileMuSources");
+        if (sources == muFlags.end())
+            return false;
+        const auto nativeModules = muFlags.find("PrecompileMuNative");
+        const auto modules = muFlags.find("PrecompileMuModules");
+        if (sources->second.empty() || nativeModules == muFlags.end() || modules == muFlags.end() || nativeModules->second.empty()
+            || modules->second.empty())
+            throw runtime_error("Mu precompilation requires source/native paths and module names");
+        TwkApp::precompileMuModules(sources->second, nativeModules->second, modules->second);
+        return true;
+    }
 
     static Options* globalOptions = 0;
 

@@ -461,6 +461,7 @@ if [ -n "${PYTHON_STAGING_DIR}" ]; then
     fi
     # Remove unnecessary CLI binaries from bundled site-packages (e.g. PyOpenColorIO/bin)
     find "${PYTHON_STAGING_DIR}" -type d -name "bin" -exec rm -rf {} + 2>/dev/null || true
+    python3 -m compileall -q "${PYTHON_STAGING_DIR}"
 fi
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -472,6 +473,30 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 elif [[ "$OSTYPE" == "linux"* ]]; then
     echo "--- Sanitizing Dynamic Library Links ---"
     python3 "${PROJECT_ROOT}/src/build/sanitize_homebrew_links.py" "${BUILD_DIR}/stage"
+fi
+
+# Generate application-owned Mu bytecode with the same executable and native
+# modules that will read it. Debug builds keep source loading for iteration.
+STAGED_MU_EXECUTABLE=""
+STAGED_MU_DIRECTORY=""
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    STAGED_MU_EXECUTABLE="${BUILD_DIR}/stage/app/UTV.app/Contents/MacOS/UTV-bin"
+    STAGED_MU_DIRECTORY="${BUILD_DIR}/stage/app/UTV.app/Contents/PlugIns/Mu"
+elif [[ "$OSTYPE" == "linux"* ]]; then
+    STAGED_MU_EXECUTABLE="${BUILD_DIR}/stage/app/bin/utv"
+    STAGED_MU_DIRECTORY="${BUILD_DIR}/stage/app/plugins/Mu"
+fi
+if [ -n "${STAGED_MU_EXECUTABLE}" ]; then
+    python3 -m compileall -q "${STAGED_MU_DIRECTORY%/Mu}/Python" "${STAGED_MU_DIRECTORY%/Mu}/MediaLibrary"
+    MU_CACHE_ARGS=()
+    if [ "${BUILD_TYPE}" != "Release" ] || [ "${UTV_PRECOMPILE_MU:-1}" = "0" ]; then
+        MU_CACHE_ARGS+=(--clean)
+    fi
+    python3 "${PROJECT_ROOT}/src/build/precompile_mu.py" \
+        --executable "${STAGED_MU_EXECUTABLE}" --mu-dir "${STAGED_MU_DIRECTORY}" "${MU_CACHE_ARGS[@]}"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        codesign --force --deep --sign - "${BUILD_DIR}/stage/app/UTV.app" 2>/dev/null || true
+    fi
 fi
 
 if [ "${INSTALL}" -eq 1 ]; then

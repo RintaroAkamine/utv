@@ -113,6 +113,8 @@ namespace Rv
 
         bool initializeAfterParsing(Options* prefs = 0);
 
+        bool runMuPrecompilation() const;
+
         //
         //  Set IO env variable arguments from the options
         //
